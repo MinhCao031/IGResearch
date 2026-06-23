@@ -1,0 +1,2 @@
+# IGResearch
+IG in xAI
