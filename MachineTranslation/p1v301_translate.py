@@ -3,7 +3,7 @@ import re
 import json
 import csv
 import torch
-from transformers import MarianMTModel, MarianTokenizer
+from transformers import AutoTokenizer, AutoModelForSeq2SeqLM
 from tqdm import tqdm
 
 os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "expandable_segments:True,max_split_size_mb:128"
@@ -11,13 +11,15 @@ os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "expandable_segments:True,max_split_size
 # =========================
 # Config
 # =========================
-MODEL_ID    = "Helsinki-NLP/opus-mt-en-vi"
-INPUT_CSV   = "rp1v301_iwslt15_envi.csv"   # CSV đã download sẵn — cột: source, reference
-OUTPUT_JSON = "wp1v301_mt_translations.json"
+MODEL_ID    = "facebook/nllb-200-3.3B"
+SRC_LANG    = "eng_Latn"
+TGT_LANG    = "vie_Latn"
+# INPUT_CSV   = "rp1v301_iwslt15_envi_test.csv"
+INPUT_CSV   = "rp1v301_medev_envi_test.csv"
+OUTPUT_JSON = "wp1v301_mt_translations_nllb.json"
 
-MAX_NEW_TOKENS = 128
-DO_SAMPLE      = False
-NUM_BEAMS      = 4       # beam search — chất lượng tốt hơn greedy cho MT
+MAX_NEW_TOKENS = 200
+NUM_BEAMS      = 4
 
 # =========================
 # Device
@@ -33,8 +35,8 @@ if device.type == "cuda":
 # Load model
 # =========================
 print(f"Loading model: {MODEL_ID}")
-tokenizer = MarianTokenizer.from_pretrained(MODEL_ID)
-model     = MarianMTModel.from_pretrained(
+tokenizer = AutoTokenizer.from_pretrained(MODEL_ID, src_lang=SRC_LANG)
+model     = AutoModelForSeq2SeqLM.from_pretrained(
     MODEL_ID,
     torch_dtype=model_dtype,
 ).to(device)
@@ -70,24 +72,15 @@ def translate(source: str) -> str:
         padding=True,
     ).to(device)
 
+    forced_bos_token_id = tokenizer.convert_tokens_to_ids(TGT_LANG)
+
     with torch.inference_mode():
-        if device.type == "cuda":
-            with torch.autocast(device_type="cuda", dtype=torch.float16):
-                output_ids = model.generate(
-                    **inputs,
-                    max_new_tokens=MAX_NEW_TOKENS,
-                    num_beams=NUM_BEAMS,
-                    do_sample=DO_SAMPLE,
-                    early_stopping=True,
-                )
-        else:
-            output_ids = model.generate(
-                **inputs,
-                max_new_tokens=MAX_NEW_TOKENS,
-                num_beams=NUM_BEAMS,
-                do_sample=DO_SAMPLE,
-                early_stopping=True,
-            )
+        output_ids = model.generate(
+            **inputs,
+            forced_bos_token_id=forced_bos_token_id,
+            num_beams=NUM_BEAMS,
+            early_stopping=True,
+        )
 
     hypothesis = tokenizer.decode(output_ids[0], skip_special_tokens=True)
     return clean_text(hypothesis)
@@ -117,9 +110,9 @@ for idx, row in enumerate(tqdm(test_set)):
 
     results.append({
         "id":         idx,
-        "source":     source,      # câu tiếng Anh gốc
-        "hypothesis": hypothesis,  # bản dịch của model
-        "reference":  reference,   # bản dịch chuẩn từ dataset
+        "source":     source,
+        "hypothesis": hypothesis,
+        "reference":  reference,
     })
 
     if device.type == "cuda":

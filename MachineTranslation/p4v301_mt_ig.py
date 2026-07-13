@@ -2,7 +2,7 @@ import os
 import json
 import torch
 import numpy as np
-from transformers import MarianMTModel, MarianTokenizer
+from transformers import AutoTokenizer, AutoModelForSeq2SeqLM
 from captum.attr import IntegratedGradients
 from tqdm import tqdm
 
@@ -11,9 +11,11 @@ os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "expandable_segments:True,max_split_size
 # =========================
 # Config
 # =========================
-MODEL_ID   = "Helsinki-NLP/opus-mt-en-vi"
-INPUT_JSON  = "wp2v301_mt_tokens.json"   # output của P2 (sau khi có)
-OUTPUT_JSON = "wp4v301_mt_ig.json"
+MODEL_ID    = "facebook/nllb-200-3.3B"
+SRC_LANG    = "eng_Latn"
+TGT_LANG    = "vie_Latn"
+INPUT_JSON  = "wp2v301_mt_tokens_nllb.json"   # output của P2 (chạy trên hypothesis của NLLB)
+OUTPUT_JSON = "wp4v301_mt_ig_nllb.json"
 N_STEPS     = 24
 
 # =========================
@@ -30,8 +32,8 @@ if device.type == "cuda":
 # Load model
 # =========================
 print(f"Loading {MODEL_ID}...")
-tokenizer = MarianTokenizer.from_pretrained(MODEL_ID)
-model     = MarianMTModel.from_pretrained(
+tokenizer = AutoTokenizer.from_pretrained(MODEL_ID, src_lang=SRC_LANG)
+model     = AutoModelForSeq2SeqLM.from_pretrained(
     MODEL_ID,
     torch_dtype=model_dtype,
 ).to(device)
@@ -39,6 +41,10 @@ model.eval()
 # use_cache = False bắt buộc cho Captum
 model.config.use_cache = False
 print(f"Model loaded. Parameters: {model.num_parameters()/1e6:.1f}M")
+
+# Token id của ngôn ngữ đích — NLLB dùng token này làm decoder start
+# (khác với MarianMT, dùng pad_token làm BOS)
+TGT_LANG_ID = tokenizer.convert_tokens_to_ids(TGT_LANG)
 
 
 # =========================
@@ -67,10 +73,9 @@ def make_forward_func(decoder_input_ids, attention_mask, decoder_attention_mask)
         # Log-softmax → log-prob của từng vị trí
         log_probs = torch.nn.functional.log_softmax(logits, dim=-1)
 
-        # Lấy log-prob của token thực tế tại mỗi vị trí
-        # decoder_input_ids là [BOS, t1, t2, ...], labels là [t1, t2, ..., EOS]
+        # decoder_input_ids là [tgt_lang_id, t1, t2, ...], labels là [t1, t2, ..., EOS]
         # Shift: logits[i] dự đoán token [i+1]
-        labels    = decoder_input_ids[:, 1:]        # bỏ BOS
+        labels    = decoder_input_ids[:, 1:]        # bỏ token ngôn ngữ đích ở đầu
         log_probs = log_probs[:, :-1, :]            # bỏ vị trí cuối
 
         # Gather log-prob của token đúng tại mỗi vị trí
@@ -107,7 +112,9 @@ def compute_ig(item: dict) -> dict | None:
     encoder_input_ids  = enc["input_ids"]
     attention_mask     = enc["attention_mask"]
 
-    # Tokenize hypothesis → decoder input (thêm BOS ở đầu)
+    # Tokenize hypothesis → decoder input
+    # NLLB (kiến trúc M2M100) KHÔNG dùng pad_token làm BOS như MarianMT.
+    # Decoder start token phải là token ngôn ngữ đích (TGT_LANG_ID).
     tgt_ids = tokenizer(
         hypothesis,
         return_tensors="pt",
@@ -116,9 +123,8 @@ def compute_ig(item: dict) -> dict | None:
         add_special_tokens=False,
     ).input_ids.to(device)
 
-    # MarianMT dùng pad_token_id làm BOS cho decoder
-    bos_id  = torch.tensor([[tokenizer.pad_token_id]], device=device)
-    decoder_input_ids  = torch.cat([bos_id, tgt_ids], dim=1)
+    tgt_lang_token = torch.tensor([[TGT_LANG_ID]], device=device)
+    decoder_input_ids     = torch.cat([tgt_lang_token, tgt_ids], dim=1)
     decoder_attention_mask = torch.ones_like(decoder_input_ids)
 
     # Encoder embeddings
@@ -129,7 +135,7 @@ def compute_ig(item: dict) -> dict | None:
         .requires_grad_(True)
     )
 
-    # Nhân với positional scaling nếu model dùng (MarianMT dùng embed_scale)
+    # Nhân với positional scaling nếu model dùng (NLLB/M2M100 cũng dùng embed_scale)
     embed_scale = getattr(model.get_encoder(), "embed_scale", 1.0)
     encoder_embeds_scaled = encoder_embeds * embed_scale
 
@@ -165,10 +171,15 @@ def compute_ig(item: dict) -> dict | None:
         for tid in src_token_ids
     ]
 
+    # NLLB thêm token ngôn ngữ nguồn (vd "eng_Latn") ở đầu chuỗi encoder input
+    # và </s> ở cuối — loại các token đặc biệt này khỏi kết quả attribution,
+    # tương tự cách script gốc loại "<pad>", "</s>" của MarianMT.
+    special_strs = {"", "<pad>", "</s>", "<s>", SRC_LANG}
+
     attribution_data = [
         {"t": tok, "s": float(score)}
         for tok, score in zip(src_token_strs, raw_scores)
-        if tok and tok not in ("", "<pad>", "</s>")
+        if tok and tok not in special_strs
     ]
 
     del encoder_embeds, encoder_embeds_scaled, attributions, baseline

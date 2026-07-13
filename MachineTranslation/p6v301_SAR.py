@@ -20,7 +20,7 @@ from scipy import stats as sp_stats
 # =========================
 # Config
 # =========================
-IG_FILE    = "wp4v301_mt_ig.json"     # có source_tokens + attribution_scores
+IG_FILE    = "wp4v301_mt_ig_nllb.json"     # có source_tokens + attribution_scores
 LABEL_FILE = "wp5v301_mt_classify.json"  # có classify_label + chrf_score
 OUTPUT_JSON = "wp6v301_mt_sar.json"
 OUTPUT_PNG  = "wp6v301_mt_sar.png"

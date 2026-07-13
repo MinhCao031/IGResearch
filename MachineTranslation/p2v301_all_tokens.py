@@ -1,15 +1,9 @@
 """
-P2 — Trích xuất content words từ source (tiếng Anh) và hypothesis (tiếng Việt).
+P2 — Trích xuất TẤT CẢ token từ source (tiếng Anh) và hypothesis (tiếng Việt).
 
-Không dùng LLM — dùng POS tagging:
-  - Source (EN): nltk + averaged_perceptron_tagger
-  - Target (VI): underthesea
-
-Content words được giữ lại:
-  - Noun (danh từ)
-  - Verb chính (không phải auxiliary)
-  - Adjective (tính từ)
-  - Number / Named entity
+Không lọc theo POS tag, không bỏ auxiliary/stopword — giữ lại toàn bộ từ:
+  - Source (EN): nltk word_tokenize (tokenize thô, không POS tag)
+  - Target (VI): underthesea word_tokenize (tokenize thô, không POS tag)
 
 Mỗi token output có vị trí ký tự (char_start, char_end) trong câu gốc
 để P4 sau này không bị nhầm khi cùng từ xuất hiện nhiều lần.
@@ -24,18 +18,17 @@ from tqdm import tqdm
 # Thư viện NLP
 # =========================
 import nltk
-from nltk import pos_tag, word_tokenize
+from nltk import word_tokenize
 
 # Download nếu chưa có
-for resource in ["averaged_perceptron_tagger", "punkt", "punkt_tab",
-                 "averaged_perceptron_tagger_eng"]:
+for resource in ["punkt", "punkt_tab"]:
     try:
         nltk.download(resource, quiet=True)
     except Exception:
         pass
 
 try:
-    from underthesea import pos_tag as vi_pos_tag
+    from underthesea import word_tokenize as vi_word_tokenize
     UNDERTHESEA_OK = True
 except ImportError:
     print("[WARN] underthesea chưa được cài. Chạy: pip install underthesea")
@@ -45,36 +38,8 @@ except ImportError:
 # =========================
 # Config
 # =========================
-INPUT_JSON  = "wp1v301_mt_translations.json"
-OUTPUT_JSON = "wp2v301_mt_tokens.json"
-
-# POS tags tiếng Anh cần giữ lại
-EN_KEEP_TAGS = {
-    "NN", "NNS", "NNP", "NNPS",          # Noun
-    "VB", "VBD", "VBG", "VBN",            # Verb
-    "VBP", "VBZ",
-    "JJ", "JJR", "JJS",                   # Adjective
-    "CD",                                  # Number
-    "FW",                                  # Foreign word
-}
-
-# Auxiliary verbs tiếng Anh — loại bỏ dù là VB
-EN_AUXILIARIES = {
-    "be", "is", "are", "was", "were", "been", "being",
-    "have", "has", "had", "having",
-    "do", "does", "did",
-    "will", "would", "shall", "should",
-    "may", "might", "must", "can", "could",
-}
-
-# POS tags tiếng Việt cần giữ lại (underthesea convention)
-VI_KEEP_TAGS = {
-    "N", "Np",   # Noun, Proper noun
-    "V",         # Verb
-    "A",         # Adjective
-    "M",         # Number
-    "Nu",        # Unit
-}
+INPUT_JSON  = "wp1v301_mt_translations_nllb.json"   # output từ script dịch NLLB
+OUTPUT_JSON = "wp2v301_mt_tokens_nllb.json"
 
 
 # =========================
@@ -119,66 +84,33 @@ def tokens_with_positions(tokens: list[str], text: str) -> list[dict]:
 
 
 # =========================
-# Tiếng Anh — source tokens
+# Tiếng Anh — source tokens (TẤT CẢ, không lọc)
 # =========================
-def extract_en_content_words(text: str) -> list[str]:
+def extract_en_all_words(text: str) -> list[str]:
     """
-    Trích xuất content words từ câu tiếng Anh bằng NLTK POS tagging.
+    Tokenize toàn bộ câu tiếng Anh, giữ lại mọi token — kể cả
+    auxiliary verb, stopword, dấu câu. Không dùng POS tagging để lọc.
     """
-    tokens = word_tokenize(text)
-    tagged = pos_tag(tokens)
-
-    result = []
-    for word, tag in tagged:
-        if tag not in EN_KEEP_TAGS:
-            continue
-        if word.lower() in EN_AUXILIARIES:
-            continue
-        if len(word) <= 1:
-            continue
-        if not re.search(r"[a-zA-Z0-9]", word):
-            continue
-        result.append(word)
-
-    return result
+    return word_tokenize(text)
 
 
 # =========================
-# Tiếng Việt — target tokens
+# Tiếng Việt — target tokens (TẤT CẢ, không lọc)
 # =========================
-def extract_vi_content_words(text: str) -> list[str]:
+def extract_vi_all_words(text: str) -> list[str]:
     """
-    Trích xuất content words từ câu tiếng Việt.
-    Dùng underthesea nếu có, fallback về tokenize đơn giản.
+    Tokenize toàn bộ câu tiếng Việt, giữ lại mọi từ — kể cả
+    stopword, dấu câu. Dùng underthesea word_tokenize (word segmentation,
+    không POS tag) nếu có, fallback về split() đơn giản.
     """
     if UNDERTHESEA_OK:
         try:
-            tagged = vi_pos_tag(text)
-            # underthesea trả về list of (word, tag)
-            result = []
-            for item in tagged:
-                word = item[0] if isinstance(item, (list, tuple)) else item
-                tag  = item[1] if isinstance(item, (list, tuple)) and len(item) > 1 else ""
-                if tag in VI_KEEP_TAGS and len(word) > 1:
-                    result.append(word)
-            return result
+            return vi_word_tokenize(text)
         except Exception as e:
             print(f"  [underthesea error] {e} — fallback")
 
-    # Fallback: lấy tất cả từ dài hơn 1 ký tự, bỏ stopwords cơ bản
-    VI_STOPWORDS = {
-        "là", "của", "và", "trong", "có", "được", "các", "một",
-        "cho", "với", "từ", "đã", "về", "theo", "không", "này",
-        "những", "để", "bị", "tại", "sẽ", "trên", "khi", "đó",
-        "ra", "vào", "lên", "xuống", "thì", "mà", "rằng",
-    }
-    tokens = text.split()
-    return [
-        t for t in tokens
-        if len(t) > 1
-        and t.lower() not in VI_STOPWORDS
-        and re.search(r"[a-zA-ZÀ-ỹ]", t)
-    ]
+    # Fallback: tokenize đơn giản theo khoảng trắng, không lọc gì cả
+    return text.split()
 
 
 # =========================
@@ -198,9 +130,9 @@ for item in tqdm(data):
     hypothesis = item["hypothesis"]
     reference  = item.get("reference", "")
 
-    # Trích xuất content words
-    src_words = extract_en_content_words(source)
-    tgt_words = extract_vi_content_words(hypothesis)
+    # Trích xuất TẤT CẢ token, không lọc
+    src_words = extract_en_all_words(source)
+    tgt_words = extract_vi_all_words(hypothesis)
 
     # Gán vị trí ký tự
     source_tokens = tokens_with_positions(src_words, source)

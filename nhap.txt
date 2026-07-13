@@ -1,0 +1,7 @@
+
+python p1v301_translate.py ;
+python p2v301_all_tokens.py ;
+python p4v301_mt_ig.py ;
+python p5v301_classify.py ;
+python p6v301_SAR.py;
+echo "~~~~~~~~~~~~~~~~DONE~~~~~~~~~~~~~~~~"

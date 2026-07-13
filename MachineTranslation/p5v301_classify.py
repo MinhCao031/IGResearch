@@ -21,7 +21,7 @@ from tqdm import tqdm
 # =========================
 # Config
 # =========================
-INPUT_JSON  = "wp4v301_mt_ig.json"    # output của P4
+INPUT_JSON  = "wp4v301_mt_ig_nllb.json"    # output của P4
 OUTPUT_JSON = "wp5v301_mt_classify.json"
 
 THRESHOLD   = 40.0    # chrF score — điều chỉnh sau khi calibrate
